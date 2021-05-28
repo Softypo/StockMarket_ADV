@@ -5,6 +5,7 @@ import pandas as pd
 
 
 ###ETL reddit data
+#----------------------------------------------------------------------------------------------------------------------------------------
 def pq (names, subredits='allstocks', sort='relevance', date='all', comments=False):
     #importing reddit api
     from reddit_api import get_reddit
@@ -93,33 +94,40 @@ def pq (names, subredits='allstocks', sort='relevance', date='all', comments=Fal
                 comments.append([row['post_id'], row['title'], comment.score, comment.id, comment.body, comment.created])
         comments = pd.DataFrame(comments,columns=['post_id', 'post', 'score', 'comment_id', 'body', 'created'])
         comments = comments.infer_objects()
+        
+        #formating dataframe
+        posts['created'] = pd.to_datetime(posts['created'], unit='s')
+        posts.set_index('created', inplace=True)
+        
         return posts, comments
+    
+    #formating dataframe
+    posts['created'] = pd.to_datetime(posts['created'], unit='s')
+    posts.set_index('created', inplace=True)
 
     return posts
 
 ###Sentiment analysis
-def sentiment (posts, comments=pd.DataFrame([]), conf=0.9):
+#----------------------------------------------------------------------------------------------------------------------------------------
+def sentiment (posts, comments=pd.DataFrame([])):
     #importing sentiment model flair
     import flair
     sentiment_model = flair.models.TextClassifier.load('en-sentiment')
 
     #calculating sentiment on body
     sentiment = []
-    confidence = []
+    score = []
     for sentence in posts['body']:
         if sentence.strip()=='':
             sentiment.append(np.nan)
-            confidence.append(np.nan)
+            score.append(np.nan)
         else:
             sample = flair.data.Sentence(sentence)
             sentiment_model.predict(sample)
             sentiment.append(sample.labels[0].value)
-            confidence.append(sample.labels[0].score)
-    
+            score.append(sample.labels[0].score)
     posts['sentiment'] = sentiment
-    posts['confidence'] = confidence
-    posts['sentiment'] = posts['sentiment'].astype('category')
-    posts['confidence'] = pd.to_numeric(posts['confidence'])
+    posts['sentiment_score'] = score
     
     #calculating sentiment on tittle if body is nan
     for index in posts[posts["sentiment"].isna()].index:
@@ -127,38 +135,51 @@ def sentiment (posts, comments=pd.DataFrame([]), conf=0.9):
             sample = flair.data.Sentence(posts.loc[index,"title"])
             sentiment_model.predict(sample)
             posts.at[index,"sentiment"] = sample.labels[0].value
-            posts.at[index,"confidence"] =  sample.labels[0].score
+            posts.at[index,"sentiment_score"] =  sample.labels[0].score
+    
+    #formating columns
+    #posts['sentiment'] = posts['sentiment'].astype('category')
+    #posts['sentiment_score'] = pd.to_numeric(posts['sentiment_score'])
 
     #calculating sentiment on comments
     if comments.empty==False:
         sentiment = []
-        confidence = []
+        score = []
         for sentence in comments['body']:
             if sentence.strip()=='':
                 sentiment.append(np.nan)
-                confidence.append(np.nan)
+                score.append(np.nan)
             else:
                 sample = flair.data.Sentence(sentence)
                 sentiment_model.predict(sample)
                 sentiment.append(sample.labels[0].value)
-                confidence.append(sample.labels[0].score)
+                score.append(sample.labels[0].score)
         comments['sentiment'] = sentiment
-        comments['confidence'] = confidence
-        comments['sentiment'] = comments['sentiment'].astype('category')
-        comments['confidence'] = pd.to_numeric(comments['confidence'])
+        comments['sentiment_score'] = score
+        #formating columns
+        #comments['sentiment'] = comments['sentiment'].astype('category')
+        #comments['sentiment_score'] = pd.to_numeric(comments['sentiment_score'])
     
-    #mean sentiment of posts by comments
-    posts["comments_sentiment"] = np.nan
-    posts["comments_confidence"] = np.nan
-    for post_id in comments["post_id"].unique():
-        posts.at[posts.loc[posts["post_id"]==post_id].index,"comments_sentiment"] = comments["sentiment"].loc[(comments["post_id"]==post_id) & (comments["confidence"]>=conf)].mode()[0]
-        posts.at[posts.loc[posts["post_id"]==post_id].index,"comments_confidence"] = comments["confidence"].loc[(comments["post_id"]==post_id) & (comments["confidence"]>=conf)].mean()
-    
-    #combined sentiment score
-    posts["combined_sentiment"] = np.where (posts['sentiment'] == posts['comments_sentiment'], "POSITIVE", "NEGATIVE")
-    posts["combined_confidence"] = (posts["confidence"]+posts["comments_confidence"])/2
+        #mean sentiment of posts by comments
+        posts["comments_sentiment"] = np.nan
+        posts["comments_score"] = np.nan
+        for post_id in comments["post_id"].unique():
+            posts.at[posts.loc[posts["post_id"]==post_id].index,"comments_sentiment"] = comments["sentiment"].loc[comments["post_id"]==post_id].mode()[0]
+            posts.at[posts.loc[posts["post_id"]==post_id].index,"comments_score"] = comments["sentiment_score"].loc[comments["post_id"]==post_id].mean()
+        
+        #combined sentiment score
+        posts["combined_sentiment"] = np.where (posts['comments_sentiment'].isna(), posts['sentiment'],np.where (posts['sentiment'] == posts['comments_sentiment'], 'POSITIVE', 'NEGATIVE'))
+        posts["combined_score"] = (posts["sentiment_score"]+posts["comments_score"])/2
+        posts["combined_score"] = np.where(posts["combined_score"].notna()==True, posts["combined_score"], posts["sentiment_score"])
+    else:
+        posts["comments_sentiment"] = np.nan
+        posts["comments_score"] = np.nan
+        posts["combined_sentiment"] = np.nan
+        posts["combined_score"] = np.nan
+
 
 ###Stock data from yahoo finance
+#----------------------------------------------------------------------------------------------------------------------------------------
 def y_stock_data (name, period, interval):
     import yfinance as yf
     stock_info = yf.Ticker(name).info
@@ -171,12 +192,13 @@ def y_stock_data (name, period, interval):
     return stock_info, stock_data, stock_c, stock_r, stock_a, stock_b, stock_qb
 
 ###look for both stock and redit data
+#----------------------------------------------------------------------------------------------------------------------------------------
 def looker (stock_name, subredits='allstocks', sort='relevance', date='all', comments=False):
     #preparing user inputs
     if date=='all': period, interval = 'max', '1d'
     elif date=='year': period, interval = '1y', '1d'
     elif date=='month': period, interval = '1mo', '1d'
-    elif date=='week': period, interval = '7d', '1h'
+    elif date=='week': period, interval = '1wk', '1d'
     elif date=='day': period, interval = '1d', '1m'
     elif date=='hour': period, interval = '1h', '1m'
 
@@ -204,15 +226,20 @@ def looker (stock_name, subredits='allstocks', sort='relevance', date='all', com
             return stock_info, stock_data, stock_c, stock_r, stock_a, stock_b, stock_qb, posts
 
 ###Analyse sentiment outputs
-def analyse (posts, comments=pd.DataFrame([]), conf=0.9):
+#----------------------------------------------------------------------------------------------------------------------------------------
+def analyse (posts, comments=pd.DataFrame([])):
     #sentiment calculation
     sentiment(posts, comments)
 
+#----------------------------------------------------------------------------------------------------------------------------------------
 def main ():
     try:
-        print ('hola')
+        stock_info, stock_data, stock_c, stock_r, stock_a, stock_b, stock_qb = y_stock_data('SLB', '1mo', '1h')
+        posts, comments = pq([stock_info['symbol']+' '+stock_info['longName']], 'all', 'relevance', 'month', True)
     except Exception:
         print (Exception)
+    
+    sentiment(posts, comments)
 
 if __name__ == "__main__":
     main()
