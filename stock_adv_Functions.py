@@ -95,13 +95,15 @@ def pq (names, subredits='allstocks', sort='relevance', date='all', comments=Fal
         comments = pd.DataFrame(comments,columns=['post_id', 'post', 'score', 'comment_id', 'body', 'created'])
         comments = comments.infer_objects()
         
-        #formating dataframe
+        #formating posts and optional comments dataframes
         posts['created'] = pd.to_datetime(posts['created'], unit='s')
         posts.set_index('created', inplace=True)
+        comments['created'] = pd.to_datetime(comments['created'], unit='s')
+        comments.set_index('created', inplace=True)
         
         return posts, comments
     
-    #formating dataframe
+    #formating postsdataframe
     posts['created'] = pd.to_datetime(posts['created'], unit='s')
     posts.set_index('created', inplace=True)
 
@@ -109,10 +111,14 @@ def pq (names, subredits='allstocks', sort='relevance', date='all', comments=Fal
 
 ###Sentiment analysis
 #----------------------------------------------------------------------------------------------------------------------------------------
-def sentiment (posts, comments=pd.DataFrame([])):
+def sentiment (posts, comments=None):
     #importing sentiment model flair
     import flair
     sentiment_model = flair.models.TextClassifier.load('en-sentiment')
+
+    #changing index for processing
+    posts.reset_index (inplace=True)
+    posts.set_index('post_id', inplace=True)
 
     #calculating sentiment on body
     sentiment = []
@@ -136,13 +142,9 @@ def sentiment (posts, comments=pd.DataFrame([])):
             sentiment_model.predict(sample)
             posts.at[index,"sentiment"] = sample.labels[0].value
             posts.at[index,"sentiment_score"] =  sample.labels[0].score
-    
-    #formating columns
-    #posts['sentiment'] = posts['sentiment'].astype('category')
-    #posts['sentiment_score'] = pd.to_numeric(posts['sentiment_score'])
 
     #calculating sentiment on comments
-    if comments.empty==False:
+    if isinstance(comments, pd.DataFrame):
         sentiment = []
         score = []
         for sentence in comments['body']:
@@ -156,16 +158,13 @@ def sentiment (posts, comments=pd.DataFrame([])):
                 score.append(sample.labels[0].score)
         comments['sentiment'] = sentiment
         comments['sentiment_score'] = score
-        #formating columns
-        #comments['sentiment'] = comments['sentiment'].astype('category')
-        #comments['sentiment_score'] = pd.to_numeric(comments['sentiment_score'])
-    
+        
         #mean sentiment of posts by comments
         posts["comments_sentiment"] = np.nan
         posts["comments_score"] = np.nan
         for post_id in comments["post_id"].unique():
-            posts.at[posts.loc[posts["post_id"]==post_id].index,"comments_sentiment"] = comments["sentiment"].loc[comments["post_id"]==post_id].mode()[0]
-            posts.at[posts.loc[posts["post_id"]==post_id].index,"comments_score"] = comments["sentiment_score"].loc[comments["post_id"]==post_id].mean()
+            posts.at[posts[posts.index==post_id].index,"comments_sentiment"] = comments["sentiment"].loc[comments["post_id"]==post_id].mode()[0]
+            posts.at[posts[posts.index==post_id].index,"comments_score"] =comments["sentiment_score"].loc[comments["post_id"]==post_id].mean()
         
         #combined sentiment score
         posts["combined_sentiment"] = np.where (posts['comments_sentiment'].isna(), posts['sentiment'],np.where (posts['sentiment'] == posts['comments_sentiment'], 'POSITIVE', 'NEGATIVE'))
@@ -176,6 +175,20 @@ def sentiment (posts, comments=pd.DataFrame([])):
         posts["comments_score"] = np.nan
         posts["combined_sentiment"] = np.nan
         posts["combined_score"] = np.nan
+    
+    #returning to original index
+    posts.reset_index(inplace=True)
+    posts.set_index('created', inplace=True)
+
+    #formating new columns
+    posts['sentiment'] = posts['sentiment'].astype('category')
+    posts['sentiment_score'] = pd.to_numeric(posts['sentiment_score'])
+    comments['sentiment'] = comments['sentiment'].astype('category')
+    comments['sentiment_score'] = pd.to_numeric(comments['sentiment_score'])
+    posts['comments_sentiment'] = posts['comments_sentiment'].astype('category')
+    posts['comments_score'] = pd.to_numeric(posts['comments_score'])
+    posts['combined_sentiment'] = posts['combined_sentiment'].astype('category')
+    posts['combined_score'] = pd.to_numeric(posts['combined_score'])
 
 
 ###Stock data from yahoo finance
@@ -211,7 +224,7 @@ def looker (stock_name, subredits='allstocks', sort='relevance', date='all', com
         print('Stock data downloaded from Yahoo finance')
         #reddit scrapping  
         if comments==True:
-            posts, comments = pq([stock_info['longName'],stock_name], subredits, sort, date, comments)
+            posts, comments = pq([stock_info['symbol']+' '+stock_info['longName']], subredits, sort, date, comments)
             #cheking dataframe
             if posts.empty: print('Posts DataFrame is empty!')
             else: print('Posts downloaded from Reddit')
@@ -219,7 +232,7 @@ def looker (stock_name, subredits='allstocks', sort='relevance', date='all', com
             else: print('Comments downloaded from Reddit')
             return stock_info, stock_data, stock_c, stock_r, stock_a, stock_b, stock_qb, posts, comments
         else:
-            posts = pq([stock_info['longName'],stock_name], subredits, sort, date, comments)
+            posts = pq([stock_info['symbol']+' '+stock_info['longName']], subredits, sort, date, comments)
             #cheking dataframe
             if posts.empty: print('Posts DataFrame is empty!')
             else: print('Posts downloaded from Reddit')
@@ -234,7 +247,7 @@ def analyse (posts, comments=pd.DataFrame([])):
 #----------------------------------------------------------------------------------------------------------------------------------------
 def main ():
     try:
-        stock_info, stock_data, stock_c, stock_r, stock_a, stock_b, stock_qb = y_stock_data('SLB', '1mo', '1h')
+        stock_info, stock_data, stock_c, stock_r, stock_a, stock_b, stock_qb = y_stock_data('AAPL', '1mo', '1h')
         posts, comments = pq([stock_info['symbol']+' '+stock_info['longName']], 'all', 'relevance', 'month', True)
     except Exception:
         print (Exception)
